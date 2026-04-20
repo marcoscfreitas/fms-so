@@ -59,50 +59,84 @@ int main() {
     float cpu_credits;
     float cpu_quota;
     float memory_quota;
-    int quota_exceeded = 0;  // flag para controlar se quota foi excedida
+    int quota_exceeded = 0;
+    int modo_prepago = 0;  // 1 = pré-pago, 0 = pós-pago
+    float custo_acumulado = 0.0;  // para pós-pago
 
-    printf("=== FMS Monitor (Operação Pré-Paga) ===\n");
+    printf("=== FMS Monitor ===\n");
 
-    // solicitar limites globais no início
+    // menu de escolha: pré-pago ou pós-pago
+    printf("\nEscolha o modo de operação:\n");
+    printf("1 - Pré-Pago (com créditos iniciais)\n");
+    printf("2 - Pós-Pago (acumula custos)\n");
+    printf("Opção (1 ou 2): ");
+    scanf("%d", &modo_prepago);
+    getchar();
+
+    if (modo_prepago != 1) {
+        modo_prepago = 0;  // qualquer opção diferente de 1 = pós-pago
+    }
+
+    // solicitar limites globais
     printf("\nConfiguração dos Limites:\n");
-    printf("Créditos Pré-Pagos: ");
-    scanf("%f", &cpu_credits);
-    getchar(); // consome o \n deixado pelo scanf
+    
+    if (modo_prepago == 1) {
+        printf("Créditos Pré-Pagos: ");
+        scanf("%f", &cpu_credits);
+        getchar();
+    } else {
+        cpu_credits = 0.0;  // pós-pago não tem créditos iniciais
+    }
 
     printf("CPU Total - Limite (s): ");
     scanf("%f", &cpu_quota);
-    getchar(); // consome o \n deixado pelo scanf
+    getchar();
 
     printf("Timeout (s): ");
     scanf("%d", &timeout);
-    getchar(); // consome o \n deixado pelo scanf
+    getchar();
 
     printf("Quota de Memória (kB): ");
     scanf("%f", &memory_quota);
-    getchar(); // consome o \n deixado pelo scanf
+    getchar();
 
     // armazenar quotas nas variáveis globais
     cpu_credits_limit = cpu_credits;
     cpu_quota_limit = cpu_quota;
     memory_quota_limit = memory_quota;
-    creditos = cpu_credits;  // inicializar créditos restantes
+    
+    if (modo_prepago == 1) {
+        creditos = cpu_credits;  // pré-pago: inicializa com créditos
+    } else {
+        creditos = 0.0;  // pós-pago: sem créditos iniciais
+    }
 
     printf("\n--- Limites Configurados ---\n");
-    printf("Créditos Disponíveis: %.2f\n", creditos);
+    if (modo_prepago == 1) {
+        printf("MODO: Pré-Pago\n");
+        printf("Créditos Disponíveis: %.2f\n", creditos);
+    } else {
+        printf("MODO: Pós-Pago\n");
+        printf("Custo Acumulado: %.2f\n", custo_acumulado);
+    }
     printf("CPU Total (limite): %.6f s\n", cpu_quota_limit);
     printf("Timeout: %d s\n", timeout);
     printf("Memória: %.0f kB\n\n", memory_quota_limit);
 
     while (1) {
-        // verificar se há créditos disponíveis
-        if (cpu_credits_limit > 0 && creditos <= 0) {
+        // verificar se há créditos disponíveis (apenas em pré-pago)
+        if (modo_prepago == 1 && cpu_credits_limit > 0 && creditos <= 0) {
             printf("\n*** Créditos esgotados! Encerrando FMS. ***\n");
             break;
         }
 
-        printf("\n[Créditos Disponíveis: %.2f] ", creditos);
+        if (modo_prepago == 1) {
+            printf("\n[Créditos Disponíveis: %.2f] ", creditos);
+        } else {
+            printf("\n[Custo Acumulado: %.2f] ", custo_acumulado);
+        }
         printf("Programa (ou 'sair' para terminar): ");
-        fgets(program, sizeof(program), stdin); // fgets para ler o nome do programa
+        fgets(program, sizeof(program), stdin);
 
         // remover o \n do final da string
         size_t len = strlen(program);
@@ -180,8 +214,12 @@ int main() {
                     memory_max_used = (float)usage.ru_maxrss;
                 }
 
-                // descontar créditos
-                creditos -= custo_total;
+                // atualizar créditos/custo baseado no modo
+                if (modo_prepago == 1) {
+                    creditos -= custo_total;  // pré-pago: desconta
+                } else {
+                    custo_acumulado += custo_total;  // pós-pago: acumula
+                }
 
                 // validação de quotas
                 printf("\n--- Validação de Quotas ---\n");
@@ -206,11 +244,16 @@ int main() {
                 printf("CPU: %.2f créditos (%.6f s × %.2f)\n", custo_cpu, cpu_exec, CUSTO_CPU_POR_SEGUNDO);
                 printf("Memória: %.2f créditos (%ld kB × %.2f)\n", custo_memoria, usage.ru_maxrss, CUSTO_MEMORIA_POR_KB);
                 printf("Total: %.2f créditos\n", custo_total);
-                printf("Créditos restantes: %.2f\n", creditos);
-
-                if (creditos <= 0.0) {
-                    printf("\n*** Créditos esgotados! ***\n");
-                    break;
+                
+                if (modo_prepago == 1) {
+                    printf("Créditos restantes: %.2f\n", creditos);
+                    
+                    if (creditos <= 0.0) {
+                        printf("\n*** Créditos esgotados! ***\n");
+                        break;
+                    }
+                } else {
+                    printf("Custo acumulado: %.2f\n", custo_acumulado);
                 }
 
                 // encerrar se quota foi excedida
@@ -224,6 +267,12 @@ int main() {
         }
     }
 
-    printf("\nFMS finalizado.\n");
+    printf("\n--- Relatório Final ---\n");
+    if (modo_prepago == 1) {
+        printf("Créditos restantes: %.2f\n", creditos);
+    } else {
+        printf("Custo total acumulado: %.2f\n", custo_acumulado);
+    }
+    printf("FMS finalizado.\n");
     return 0;
 }
