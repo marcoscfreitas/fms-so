@@ -12,6 +12,8 @@
 pid_t child_pid;
 int finished = 0;
 pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
+float cpu_quota_limit = 0.0;  // quota de CPU para a execução (segundos)
+float memory_quota_limit = 0.0;   // quota de memória para a execução (kB)
 
 // thread para monitoramento do timeout do processo filho
 void* monitor(void* arg) {
@@ -46,6 +48,8 @@ void* monitor(void* arg) {
 int main() {
     char program[256];
     int timeout;
+    float cpu_quota;
+    float memory_quota;
 
     printf("=== FMS Monitor ===\n");
 
@@ -67,7 +71,17 @@ int main() {
         scanf("%d", &timeout);
         getchar(); // consome o \n deixado pelo scanf
 
+        printf("Quota de CPU (s): ");
+        scanf("%f", &cpu_quota);
+        getchar(); // consome o \n deixado pelo scanf
+
+        printf("Quota de Memória (kB): ");
+        scanf("%f", &memory_quota);
+        getchar(); // consome o \n deixado pelo scanf
+
         finished = 0; // reseta a flag finished para o próximo programa
+        cpu_quota_limit = cpu_quota;       // armazena quota de CPU nas variáveis globais
+        memory_quota_limit = memory_quota; // armazena quota de memória nas variáveis globais
 
         pid_t pid = fork(); // criar processo filho para executar o programa
 
@@ -101,6 +115,25 @@ int main() {
             printf("CPU user: %ld.%06ld s\n", usage.ru_utime.tv_sec, usage.ru_utime.tv_usec);
             printf("CPU system: %ld.%06ld s\n", usage.ru_stime.tv_sec, usage.ru_stime.tv_usec);
             printf("Memória máxima (maxrss): %ld kB\n", usage.ru_maxrss);
+
+            // calcular CPU total em segundos
+            float cpu_total = usage.ru_utime.tv_sec + usage.ru_utime.tv_usec / 1000000.0 + (usage.ru_stime.tv_sec + usage.ru_stime.tv_usec / 1000000.0);
+
+            // validação de quotas
+            printf("\n--- Validação de Quotas ---\n");
+            printf("CPU: %.6f s / %.6f s", cpu_total, cpu_quota_limit);
+            if (cpu_total > cpu_quota_limit) {
+                printf("EXCEDIDA\n");
+            } else {
+                printf("OK\n");
+            }
+
+            printf("Memória: %f kB / %f kB", (float)usage.ru_maxrss, memory_quota_limit);
+            if (usage.ru_maxrss > memory_quota_limit) {
+                printf("EXCEDIDA\n");
+            } else {
+                printf("OK\n");
+            }
         } else {
             perror("Erro ao fazer fork");
         }
