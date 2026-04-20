@@ -129,44 +129,57 @@ int main() {
 
             pthread_join(tid, NULL); // aguarda a thread de monitoramento terminar
 
-            // bloco para log de uso de recursos
-            printf("\nPrograma finalizado.\n");
-            printf("CPU user: %ld.%06ld s\n", usage.ru_utime.tv_sec, usage.ru_utime.tv_usec);
-            printf("CPU system: %ld.%06ld s\n", usage.ru_stime.tv_sec, usage.ru_stime.tv_usec);
-            printf("Memória máxima (maxrss): %ld kB\n", usage.ru_maxrss);
-
-            // calcular CPU total desta execução em segundos
-            float cpu_exec = (usage.ru_utime.tv_sec + usage.ru_utime.tv_usec / 1000000.0) + (usage.ru_stime.tv_sec + usage.ru_stime.tv_usec / 1000000.0);
-
-            // acumular CPU e atualizar memória máxima
-            cpu_total_used += cpu_exec;
-            if ((float)usage.ru_maxrss > memory_max_used) {
-                memory_max_used = (float)usage.ru_maxrss;
+            // verificar se processo falhou ao executar o binário
+            int exec_failed = 0;
+            if (WIFEXITED(status)) {
+                int exit_code = WEXITSTATUS(status);
+                if (exit_code == 1) {
+                    exec_failed = 1;  // falha em executar o binário
+                }
             }
 
-            // validação de quotas
-            printf("\n--- Validação de Quotas ---\n");
-            printf("CPU desta execução: %.6f s\n", cpu_exec);
-            printf("CPU acumulada: %.6f s / %.6f s ", cpu_total_used, cpu_quota_limit);
-            if (cpu_quota_limit > 0 && cpu_total_used > cpu_quota_limit) {
-                printf("EXCEDIDA\n");
-                quota_exceeded = 1;
+            if (exec_failed) {
+                printf("\n*** Erro: falha ao lançar o binário. Não será descontada quota. ***\n");
             } else {
-                printf("OK\n");
-            }
+                // bloco para log de uso de recursos
+                printf("\nPrograma finalizado.\n");
+                printf("CPU user: %ld.%06ld s\n", usage.ru_utime.tv_sec, usage.ru_utime.tv_usec);
+                printf("CPU system: %ld.%06ld s\n", usage.ru_stime.tv_sec, usage.ru_stime.tv_usec);
+                printf("Memória máxima (maxrss): %ld kB\n", usage.ru_maxrss);
 
-            printf("Memória máxima: %ld kB / %.0f kB ", usage.ru_maxrss, memory_quota_limit);
-            if (memory_quota_limit > 0 && usage.ru_maxrss > memory_quota_limit) {
-                printf("EXCEDIDA\n");
-                quota_exceeded = 1;
-            } else {
-                printf("OK\n");
-            }
+                // calcular CPU total desta execução em segundos
+                float cpu_exec = (usage.ru_utime.tv_sec + usage.ru_utime.tv_usec / 1000000.0) + (usage.ru_stime.tv_sec + usage.ru_stime.tv_usec / 1000000.0);
 
-            // encerrar se quota foi excedida
-            if (quota_exceeded) {
-                printf("\n*** Quota excedida! Encerrando FMS. ***\n");
-                break;
+                // acumular CPU e atualizar memória máxima (apenas se execução foi bem-sucedida)
+                cpu_total_used += cpu_exec;
+                if ((float)usage.ru_maxrss > memory_max_used) {
+                    memory_max_used = (float)usage.ru_maxrss;
+                }
+
+                // validação de quotas
+                printf("\n--- Validação de Quotas ---\n");
+                printf("CPU desta execução: %.6f s\n", cpu_exec);
+                printf("CPU acumulada: %.6f s / %.6f s ", cpu_total_used, cpu_quota_limit);
+                if (cpu_quota_limit > 0 && cpu_total_used > cpu_quota_limit) {
+                    printf("EXCEDIDA\n");
+                    quota_exceeded = 1;
+                } else {
+                    printf("OK\n");
+                }
+
+                printf("Memória máxima: %ld kB / %.0f kB ", usage.ru_maxrss, memory_quota_limit);
+                if (memory_quota_limit > 0 && usage.ru_maxrss > memory_quota_limit) {
+                    printf("EXCEDIDA\n");
+                    quota_exceeded = 1;
+                } else {
+                    printf("OK\n");
+                }
+
+                // encerrar se quota foi excedida
+                if (quota_exceeded) {
+                    printf("\n*** Quota excedida! Encerrando FMS. ***\n");
+                    break;
+                }
             }
         } else {
             perror("Erro ao fazer fork");
