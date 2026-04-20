@@ -14,6 +14,8 @@ int finished = 0;
 pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
 float cpu_quota_limit = 0.0;  // quota de CPU para a execução (segundos)
 float memory_quota_limit = 0.0;   // quota de memória para a execução (kB)
+float cpu_total_used = 0.0;  // acúmulo de CPU utilizada (segundos)
+float memory_max_used = 0.0;  // máximo de memória utilizada (kB)
 
 // thread para monitoramento do timeout do processo filho
 void* monitor(void* arg) {
@@ -50,11 +52,42 @@ int main() {
     int timeout;
     float cpu_quota;
     float memory_quota;
+    int quota_exceeded = 0;  // flag para controlar se quota foi excedida
 
     printf("=== FMS Monitor ===\n");
 
+    // solicitar limites globais no início
+    printf("\nConfiguração dos Limites Globais:\n");
+    printf("Timeout (s): ");
+    scanf("%d", &timeout);
+    getchar(); // consome o \n deixado pelo scanf
+
+    printf("Quota de CPU (s): ");
+    scanf("%f", &cpu_quota);
+    getchar(); // consome o \n deixado pelo scanf
+
+    printf("Quota de Memória (kB): ");
+    scanf("%f", &memory_quota);
+    getchar(); // consome o \n deixado pelo scanf
+
+    // armazenar quotas nas variáveis globais
+    cpu_quota_limit = cpu_quota;
+    memory_quota_limit = memory_quota;
+
+    printf("\n--- Limites Configurados ---\n");
+    printf("Timeout: %d s\n", timeout);
+    printf("CPU: %.6f s\n", cpu_quota_limit);
+    printf("Memória: %.0f kB\n\n", memory_quota_limit);
+
     while (1) {
-        printf("\nPrograma (ou 'sair' para terminar): ");
+        // verificar se há quota de CPU disponível
+        if (cpu_quota_limit > 0 && cpu_total_used >= cpu_quota_limit) {
+            printf("\n*** Quota de CPU excedida! Encerrando FMS. ***\n");
+            quota_exceeded = 1;
+            break;
+        }
+
+        printf("Programa (ou 'sair' para terminar): ");
         fgets(program, sizeof(program), stdin); // fgets para ler o nome do programa
 
         // remover o \n do final da string
@@ -67,21 +100,7 @@ int main() {
             break;
         }
 
-        printf("Timeout (s): ");
-        scanf("%d", &timeout);
-        getchar(); // consome o \n deixado pelo scanf
-
-        printf("Quota de CPU (s): ");
-        scanf("%f", &cpu_quota);
-        getchar(); // consome o \n deixado pelo scanf
-
-        printf("Quota de Memória (kB): ");
-        scanf("%f", &memory_quota);
-        getchar(); // consome o \n deixado pelo scanf
-
         finished = 0; // reseta a flag finished para o próximo programa
-        cpu_quota_limit = cpu_quota;       // armazena quota de CPU nas variáveis globais
-        memory_quota_limit = memory_quota; // armazena quota de memória nas variáveis globais
 
         pid_t pid = fork(); // criar processo filho para executar o programa
 
@@ -116,23 +135,38 @@ int main() {
             printf("CPU system: %ld.%06ld s\n", usage.ru_stime.tv_sec, usage.ru_stime.tv_usec);
             printf("Memória máxima (maxrss): %ld kB\n", usage.ru_maxrss);
 
-            // calcular CPU total em segundos
-            float cpu_total = usage.ru_utime.tv_sec + usage.ru_utime.tv_usec / 1000000.0 + (usage.ru_stime.tv_sec + usage.ru_stime.tv_usec / 1000000.0);
+            // calcular CPU total desta execução em segundos
+            float cpu_exec = (usage.ru_utime.tv_sec + usage.ru_utime.tv_usec / 1000000.0) + (usage.ru_stime.tv_sec + usage.ru_stime.tv_usec / 1000000.0);
+
+            // acumular CPU e atualizar memória máxima
+            cpu_total_used += cpu_exec;
+            if ((float)usage.ru_maxrss > memory_max_used) {
+                memory_max_used = (float)usage.ru_maxrss;
+            }
 
             // validação de quotas
             printf("\n--- Validação de Quotas ---\n");
-            printf("CPU: %.6f s / %.6f s", cpu_total, cpu_quota_limit);
-            if (cpu_total > cpu_quota_limit) {
+            printf("CPU desta execução: %.6f s\n", cpu_exec);
+            printf("CPU acumulada: %.6f s / %.6f s ", cpu_total_used, cpu_quota_limit);
+            if (cpu_quota_limit > 0 && cpu_total_used > cpu_quota_limit) {
                 printf("EXCEDIDA\n");
+                quota_exceeded = 1;
             } else {
                 printf("OK\n");
             }
 
-            printf("Memória: %f kB / %f kB", (float)usage.ru_maxrss, memory_quota_limit);
-            if (usage.ru_maxrss > memory_quota_limit) {
+            printf("Memória máxima: %ld kB / %.0f kB ", usage.ru_maxrss, memory_quota_limit);
+            if (memory_quota_limit > 0 && usage.ru_maxrss > memory_quota_limit) {
                 printf("EXCEDIDA\n");
+                quota_exceeded = 1;
             } else {
                 printf("OK\n");
+            }
+
+            // encerrar se quota foi excedida
+            if (quota_exceeded) {
+                printf("\n*** Quota excedida! Encerrando FMS. ***\n");
+                break;
             }
         } else {
             perror("Erro ao fazer fork");
