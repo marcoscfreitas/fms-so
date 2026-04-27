@@ -232,11 +232,11 @@ int main() {
                     memory_max_used = (float)usage.ru_maxrss;
                 }
 
-                // ATUALIZAR: Créditos/custo conforme modo de operação
+                // atualiza os créditos ou custo acumulado dependendo do modo selecionado pelo usuário
                 if (modo_prepago == 1) {
-                    creditos -= custo_total;   // Pré-pago: DESCONTA os créditos disponíveis
+                    creditos -= custo_total;
                 } else {
-                    custo_acumulado += custo_total;  // Pós-pago: ACUMULA o custo total
+                    custo_acumulado += custo_total;
                 }
 
                 // relatório de validação das quotas, caso alguma quota tenha excedido, encerra o programa
