@@ -1,39 +1,45 @@
-#include <stdio.h>
-#include <stdlib.h>
-#include <unistd.h>
-#include <sys/wait.h>
-#include <sys/resource.h>
-#include <pthread.h>
-#include <signal.h>
-#include <string.h>
-#include <time.h>
+#include <stdio.h> // lib para entrada/saída padrão
+#include <stdlib.h> // lib para funções de alocação, controle de processos, etc.
+#include <unistd.h> // lib para chamadas de sistema POSIX (fork, exec, etc.)
+#include <sys/wait.h> // lib para espera de processos filhos
+#include <sys/resource.h> // lib para gerenciamento de recursos do sistema
+#include <pthread.h> // lib para programação com threads
+#include <signal.h> // lib para manipulação de sinais
+#include <string.h> // lib para manipulação de strings
+#include <time.h> // lib para manipulação de tempo
 
-// constantes de custo
+// constantes de faturamento para o cálculo de custos
 const float CUSTO_CPU_POR_SEGUNDO = 2.0;
 const float CUSTO_MEMORIA_POR_KB = 0.01;
 
-// variaveis globais para comunicação entre threads e processos
+// variaveis globais compartilhadas entre threads e processos, mutex para gerenciar acesso a essas variáveis
 pid_t child_pid;
-int finished = 0;
+int finished;
 pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
-float cpu_credits_limit = 0.0;  // créditos pré-pagos em CPU (segundos)
-float cpu_quota_limit = 0.0;  // quota de CPU por programa (segundos)
-float memory_quota_limit = 0.0;   // quota de memória para a execução (kB)
-float cpu_total_used = 0.0;  // acúmulo de CPU utilizada (segundos)
-float memory_max_used = 0.0;  // máximo de memória utilizada (kB)
-float creditos = 0.0;  // créditos restantes
 
-// thread para monitoramento do timeout do processo filho
+// limites configurados pelo usuário, crédito prépago, quota de cpu e memória
+float credits_limit;
+float cpu_quota_limit;
+float memory_quota_limit;
+
+// variaveis para armazenar o uso de recursos
+float cpu_total_used;
+float memory_max_used;
+float creditos;
+
+// função responsável por monitorar o processo filho e matar se atingir o timeout
 void* monitor(void* arg) {
     int timeout = *(int*)arg;
     struct timespec sleep_time;
 
+    // loop de monitoramento do processo, continua até o timeout ser atingido ou o processo filho terminar
     for (int i = 0; i < timeout; i++) {
+        // usa o sleep de 1 segundo para verificar o status do processo
         sleep_time.tv_sec = 1;
         sleep_time.tv_nsec = 0;
         nanosleep(&sleep_time, NULL);
 
-        // se mutex_lock bloqueado -> processo terminou, então sair da thread
+        // mutex para trancar o acesso à variável 'finished' e verificar se o processo filho já terminou
         pthread_mutex_lock(&mutex);
         if (finished) {
             pthread_mutex_unlock(&mutex);
@@ -42,6 +48,7 @@ void* monitor(void* arg) {
         pthread_mutex_unlock(&mutex);
     }
 
+    // caso o timeout seja atingido e o processo ainda esteja rodando, envia o sinal SIGKILL para mata-lo
     pthread_mutex_lock(&mutex);
     if (!finished) {
         printf("\nTimeout atingido! Matando processo...\n");
@@ -53,19 +60,21 @@ void* monitor(void* arg) {
     return NULL;
 }
 
+// função principal, exibe menu, configura limite, executa programas, monitora recursos e calcula custos
 int main() {
+    // variaveis locais da função
     char program[256];
-    int timeout;
-    float cpu_credits;
-    float cpu_quota;
-    float memory_quota;
+    int timeout = 0;
+    float credits = 0.0;
+    float cpu_quota = 0.0;
+    float memory_quota = 0.0;
     int quota_exceeded = 0;
-    int modo_prepago = 0;  // 1 = pré-pago, 0 = pós-pago
-    float custo_acumulado = 0.0;  // para pós-pago
+    int modo_prepago = 0;
+    float custo_acumulado = 0.0;
 
     printf("=== FMS Monitor ===\n");
 
-    // menu de escolha: pré-pago ou pós-pago
+    // bloco de seleção de modo de operação
     printf("\nEscolha o modo de operação:\n");
     printf("1 - Pré-Pago (com créditos iniciais)\n");
     printf("2 - Pós-Pago (acumula custos)\n");
@@ -73,19 +82,15 @@ int main() {
     scanf("%d", &modo_prepago);
     getchar();
 
-    if (modo_prepago != 1) {
-        modo_prepago = 0;  // qualquer opção diferente de 1 = pós-pago
-    }
-
-    // solicitar limites globais
+    // bloco de configuração dos limites e créditos
     printf("\nConfiguração dos Limites:\n");
     
     if (modo_prepago == 1) {
         printf("Créditos Pré-Pagos: ");
-        scanf("%f", &cpu_credits);
+        scanf("%f", &credits);
         getchar();
     } else {
-        cpu_credits = 0.0;  // pós-pago não tem créditos iniciais
+        credits = 0.0;
     }
 
     printf("CPU Total - Limite (s): ");
@@ -100,17 +105,19 @@ int main() {
     scanf("%f", &memory_quota);
     getchar();
 
-    // armazenar quotas nas variáveis globais
-    cpu_credits_limit = cpu_credits;
+    // passa valores para variáveis globais
+    credits_limit = credits;
     cpu_quota_limit = cpu_quota;
     memory_quota_limit = memory_quota;
     
+    // se for prepago inicia com os créditos inseridos, caso contrário não usa
     if (modo_prepago == 1) {
-        creditos = cpu_credits;  // pré-pago: inicializa com créditos
+        creditos = credits;
     } else {
-        creditos = 0.0;  // pós-pago: sem créditos iniciais
+        creditos = 0.0;
     }
 
+    // exibe os limites configurados para o usuário antes de iniciar o loop de execução
     printf("\n--- Limites Configurados ---\n");
     if (modo_prepago == 1) {
         printf("MODO: Pré-Pago\n");
@@ -123,76 +130,86 @@ int main() {
     printf("Timeout: %d s\n", timeout);
     printf("Memória: %.0f kB\n\n", memory_quota_limit);
 
+    // bloco com loop infinito principal de execução dos programas, monitoramento e cálculo de custos
     while (1) {
-        // verificar se há créditos disponíveis (apenas em pré-pago)
-        if (modo_prepago == 1 && cpu_credits_limit > 0 && creditos <= 0) {
+        // validação para encerrar o FMS caso seja modo pré-pago e os créditos acabaram
+        if (modo_prepago == 1 && credits_limit > 0 && creditos <= 0) {
             printf("\n*** Créditos esgotados! Encerrando FMS. ***\n");
             break;
         }
 
+        // mostra créditos disponiveis ou custo acumulado antes de solicitar o programa
         if (modo_prepago == 1) {
             printf("\n[Créditos Disponíveis: %.2f] ", creditos);
         } else {
             printf("\n[Custo Acumulado: %.2f] ", custo_acumulado);
         }
         printf("Programa (ou 'sair' para terminar): ");
+        
+        // lê o nome do programa a ser executado, usando fgets
         fgets(program, sizeof(program), stdin);
 
-        // remover o \n do final da string
+        // remove o \n do final da string lida por fgets, se existir
         size_t len = strlen(program);
         if (len > 0 && program[len - 1] == '\n') {
             program[len - 1] = '\0';
         }
 
+        // se o usuário digitar 'sair', o loop principal é encerrado e o FMS finaliza
         if (strcmp(program, "sair") == 0) {
             break;
         }
 
-        finished = 0; // reseta a flag finished para o próximo programa
-        time_t inicio_exec = time(NULL);  // marca tempo inicial de execução
+        // incializa variáveis para monitoramento e controle do processo filho
+        finished = 0;
+        time_t inicio_exec = time(NULL);
 
-        pid_t pid = fork(); // criar processo filho para executar o programa
+        // usa o fork para criar um processo filho que irá executar o programa solicitado pelo usuário
+        pid_t pid = fork();
 
+        // se o fork falhar, exibe mensagem de erro e continua para próxima iteração do loop
         if (pid == 0) {
-            // processo filho
-            execlp(program, program, NULL); // executar o programa
+            execlp(program, program, NULL);
             perror("Erro ao executar");
             exit(127);
         } else if (pid > 0) {
-            // processo pai
+            //se o fork for bem-sucedido, o processo continua, armazenando o PID do filho para monitoramento
             child_pid = pid;
 
-            // bloco para iniciar thread de monitoramento
+            // cria thread de monitoramento para acompanhar o processo filho e seu timeout
             pthread_t tid;
-            pthread_create(&tid, NULL, monitor, &timeout); // inicia a thread de monitoramento timeout
+            pthread_create(&tid, NULL, monitor, &timeout);
 
-            // bloco para uso de recursos
+            // wait4() é usado em vez de wait() para obter informações detalhadas sobre o uso de recursos do processo filho, rusage é preenchida com os dados de uso de recursos do processo filho quando ele termina
             int status;
             struct rusage usage;
-            wait4(child_pid, &status, 0, &usage); // aguarda o processo filho e pegar uso de recursos
+            wait4(child_pid, &status, 0, &usage);
 
-            // bloco para sinalizar que o processo terminou
+            // sinaliza para thread de monitoramento que o processo acabou, utilizando mutex para o acesso seguro à variável 'finished'
             pthread_mutex_lock(&mutex);
             finished = 1;
             pthread_mutex_unlock(&mutex);
 
-            pthread_join(tid, NULL); // aguarda a thread de monitoramento terminar
+            // espera thread de monitoramento acabar antes de continuar
+            pthread_join(tid, NULL);
 
-            // verificar se processo falhou ao executar o binário
+            // valida se o processo foi executado ou se houve erro, código de saída 127 programa não encontrado
             int exec_failed = 0;
             if (WIFEXITED(status)) {
                 int exit_code = WEXITSTATUS(status);
                 if (exit_code == 127) {
-                    exec_failed = 1;  // falha em executar o binário
+                    exec_failed = 1;
                 }
             }
 
+            // se houve falha na execução, exibe erro e não desconta nada, caso contrário, processa o uso de recursos
             if (exec_failed) {
                 printf("\n*** Erro: falha ao lançar o binário. Não será descontada quota. ***\n");
             } else {
-                time_t fim_exec = time(NULL);  // marca tempo final de execução
+                // pega o tempo final da execução do programa
+                time_t fim_exec = time(NULL);
                 
-                // bloco para log de uso de recursos
+                // mostra os recursos utilizados, obtidos através da struct rusage preenchida por wait4()
                 printf("\nPrograma finalizado.\n");
                 printf("\n--- Uso de Recursos ---\n");
                 printf("CPU user: %ld.%06ld s\n", usage.ru_utime.tv_sec, usage.ru_utime.tv_usec);
@@ -200,28 +217,29 @@ int main() {
                 printf("Memória máxima (maxrss): %ld kB\n", usage.ru_maxrss);
                 printf("Tempo total de execução: %ld segundos\n", fim_exec - inicio_exec);
 
-                // calcular CPU total desta execução em segundos
-                float cpu_exec = (usage.ru_utime.tv_sec + usage.ru_utime.tv_usec / 1000000.0) + (usage.ru_stime.tv_sec + usage.ru_stime.tv_usec / 1000000.0);
+                // cálculo da cpu total da execução (user + system), convertendo microsegundos para segundos
+                float cpu_exec = (usage.ru_utime.tv_sec + usage.ru_utime.tv_usec / 1000000.0) + 
+                                  (usage.ru_stime.tv_sec + usage.ru_stime.tv_usec / 1000000.0);
 
-                // calcular custo da execução
+                // cálculo de custo de cpu e memória baseado nas constantes
                 float custo_cpu = cpu_exec * CUSTO_CPU_POR_SEGUNDO;
                 float custo_memoria = usage.ru_maxrss * CUSTO_MEMORIA_POR_KB;
                 float custo_total = custo_cpu + custo_memoria;
 
-                // acumular CPU e atualizar memória máxima (apenas se execução foi bem-sucedida)
+                // mantém registro do custo total da cpu utilizada e maximo de memoria para relatorio
                 cpu_total_used += cpu_exec;
                 if ((float)usage.ru_maxrss > memory_max_used) {
                     memory_max_used = (float)usage.ru_maxrss;
                 }
 
-                // atualizar créditos/custo baseado no modo
+                // ATUALIZAR: Créditos/custo conforme modo de operação
                 if (modo_prepago == 1) {
-                    creditos -= custo_total;  // pré-pago: desconta
+                    creditos -= custo_total;   // Pré-pago: DESCONTA os créditos disponíveis
                 } else {
-                    custo_acumulado += custo_total;  // pós-pago: acumula
+                    custo_acumulado += custo_total;  // Pós-pago: ACUMULA o custo total
                 }
 
-                // validação de quotas
+                // relatório de validação das quotas, caso alguma quota tenha excedido, encerra o programa
                 printf("\n--- Validação de Quotas ---\n");
                 printf("CPU desta execução: %.6f s / %.6f s (limite) ", cpu_exec, cpu_quota_limit);
                 if (cpu_quota_limit > 0 && cpu_exec > cpu_quota_limit) {
@@ -239,15 +257,17 @@ int main() {
                     printf("OK\n");
                 }
 
-                // mostrar custo da execução
+                // mostra o custo da execução de cpu, memória e total de créditos
                 printf("\n--- Custo da Execução ---\n");
                 printf("CPU: %.2f créditos (%.6f s × %.2f)\n", custo_cpu, cpu_exec, CUSTO_CPU_POR_SEGUNDO);
                 printf("Memória: %.2f créditos (%ld kB × %.2f)\n", custo_memoria, usage.ru_maxrss, CUSTO_MEMORIA_POR_KB);
                 printf("Total: %.2f créditos\n", custo_total);
                 
+                // dependendo do modo selecionado, mostra créditos restantes ou custo acumulado
                 if (modo_prepago == 1) {
                     printf("Créditos restantes: %.2f\n", creditos);
                     
+                    // se acabar os créditos, encerra o FMS
                     if (creditos <= 0.0) {
                         printf("\n*** Créditos esgotados! ***\n");
                         break;
@@ -256,17 +276,16 @@ int main() {
                     printf("Custo acumulado: %.2f\n", custo_acumulado);
                 }
 
-                // encerrar se quota foi excedida
+                // se o programa exceder alguma quota, encerra o FMS
                 if (quota_exceeded) {
                     printf("\n*** Quota excedida! Encerrando FMS. ***\n");
                     break;
                 }
             }
-        } else {
-            perror("Erro ao fazer fork");
         }
     }
 
+    // relatório final que exibe o saldo restante ou custo total da operação
     printf("\n--- Relatório Final ---\n");
     if (modo_prepago == 1) {
         printf("Créditos restantes: %.2f\n", creditos);
